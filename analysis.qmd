@@ -14,6 +14,132 @@ library(dbplyr)
 ```
 
 ```{r}
+atus_con <- dbConnect(duckdb(), "data/atus.duckdb", read_only = TRUE)
+dbplyr_act <- tbl(atus_con, "activities")
+dbplyr_resp <- tbl(atus_con, "respondents")
+dbplyr_codes <- tbl(atus_con, "activity_codes")
+dbplyr_codes |>
+  collect() |>
+  print()
+table_counts <- tibble(
+  table = c("activities", "respondents", "activity_codes"),
+  rows = c(
+    dbplyr_act |> summarise(rows = n()) |> collect() |> pull(rows),
+    dbplyr_resp |> summarise(rows = n()) |> collect() |> pull(rows),
+    dbplyr_codes |> summarise(rows = n()) |> collect() |> pull(rows)
+  )
+)
+print(table_counts)
+dbplyr_act |>
+  inner_join(
+    dbplyr_codes |> select(activity_code, major_name),
+    by = "activity_code"
+  ) |>
+  count(major_name, sort = TRUE) |>
+  collect() |>
+  print()
+dbplyr_act |>
+  inner_join(
+    dbplyr_codes |> select(activity_code, major_name),
+    by = "activity_code"
+  ) |>
+  filter(!is.na(duration_min)) |>
+  group_by(major_name) |>
+  summarise(avg_duration_min = mean(duration_min)) |>
+  arrange(desc(avg_duration_min)) |>
+  collect() |>
+  print()
+dbplyr_resp |>
+  count(sex, employment_status) |>
+  collect() |>
+  print()
+dbplyr_resp |>
+  count(year) |>
+  collect() |>
+  arrange(year) |>
+  print()
+weekday_not_labor_force <- dbplyr_act |>
+  inner_join(
+    dbplyr_resp |>
+      filter(day_type == "Weekday", employment_status == "Not in labor force") |>
+      select(tucaseid, sex),
+    by = "tucaseid"
+  ) |>
+  inner_join(
+    dbplyr_codes |> select(activity_code, major_name),
+    by = "activity_code"
+  ) |>
+  filter(!is.na(duration_min)) |>
+  group_by(tucaseid, sex, major_name) |>
+  summarise(minutes = sum(duration_min), .groups = "drop") |>
+  collect()
+print(weekday_not_labor_force)
+activity_avg <- weekday_not_labor_force |>
+  group_by(sex, major_name) |>
+  summarise(avg_daily_min = mean(minutes), .groups = "drop")
+print(activity_avg)
+```
+
+```{r}
+keep_cats <- c(
+  "Personal Care Activities",
+  "Household Activities",
+  "Caring For & Helping Household (HH) Members",
+  "Socializing, Relaxing, and Leisure"
+)
+
+hourly_avg <- dbplyr_act |>
+  mutate(hour = start_hhmm %/% 100L) |>
+  filter(hour >= 6L, hour <= 23L) |>
+  left_join(dbplyr_codes |> select(activity_code, major_name), by = "activity_code") |>
+  filter(major_name %in% keep_cats) |>
+  inner_join(
+    dbplyr_resp |>
+      filter(str_starts(employment_status, "Not"), day_type == "Weekday") |>
+      select(tucaseid, sex),
+    by = "tucaseid"
+  ) |>
+  group_by(sex, hour, major_name) |>
+  summarise(avg_min = mean(duration_min, na.rm = TRUE), .groups = "drop") |>
+  collect()
+print(hourly_avg)
+```
+
+```{r}
+ggplot(hourly_avg, aes(x = hour, y = avg_min, fill = major_name, group = major_name)) +
+  geom_area() +
+  facet_wrap(~ sex) +
+  scale_x_continuous(
+    breaks = c(6, 9, 12, 15, 18, 21, 23),
+    labels = c("6 AM", "9 AM", "12 PM", "3 PM", "6 PM", "9 PM", "11 PM")
+  ) +
+  labs(
+    title = "How the Weekday Fills Up",
+    subtitle = "Average minutes spent in each major activity category by hour and sex",
+    x = "Time of day",
+    y = "Average minutes",
+    fill = "Major activity category",
+    caption = "Source: BLS American Time Use Survey; weekday respondents not in the labor force"
+  )
+```
+
+```{r}
+activity_avg |>
+  filter(major_name != "Data Codes") |>
+  mutate(major_name = fct_reorder(major_name, avg_daily_min)) |>
+  ggplot(aes(x = avg_daily_min, y = major_name, fill = sex)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "How Non-Employed Americans Spend Weekdays",
+    subtitle = "Average daily minutes by major activity category and sex",
+    x = "Average minutes per weekday",
+    y = "Major activity category",
+    fill = "Sex",
+    caption = "Source: BLS American Time Use Survey; weekday non-employed respondents"
+  )
+```
+
+```{r}
 con <- dbConnect(duckdb(), "data/seda_2025.duckdb", read_only = TRUE)
 dbplyr_dist <- tbl(con, "district_scores")
 ```
